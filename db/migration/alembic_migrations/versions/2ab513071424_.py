@@ -1,5 +1,4 @@
-# Copyright (c) 2014 OpenStack Foundation.
-# All Rights Reserved.
+# Copyright 2017 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -12,22 +11,27 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+#
+
+"""empty message
+
+Revision ID: 2ab513071424
+Revises: 2910a512f8de
+Create Date: 2017-10-11 16:06:42.319101
 
 """
-The module provides all database models at current HEAD.
 
-Its purpose is to create comparable metadata with current database schema.
-Based on this comparison database can be healed with healing migration.
+# revision identifiers, used by Alembic.
+revision = '2ab513071424'
+down_revision = '2910a512f8de'
 
-"""
-
-from tacker.db import model_base
-from tacker.db.nfvo import nfvo_db  # noqa
-from tacker.db.nfvo import ns_db  # noqa
-from tacker.db.nfvo import vnffg_db  # noqa
-from tacker.db.nfvo import vnfcluster_db  # noqa
-from tacker.db.vnfm import vnfm_db  # noqa
+from alembic import op
+import sqlalchemy as sa
+from tacker.db.types import Json
 
 
-def get_metadata():
-    return model_base.BASE.metadata
+from tacker.db import migration
+
+
+def upgrade(active_plugins=None, options=None):
+    print 'skip'

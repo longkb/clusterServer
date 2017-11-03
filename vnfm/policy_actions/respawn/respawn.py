@@ -20,6 +20,7 @@ from tacker.plugins.common import constants
 from tacker.vnfm.infra_drivers.openstack import heat_client as hc
 from tacker.vnfm.policy_actions import abstract_action
 from tacker.vnfm import vim_client
+from tacker import manager
 
 LOG = logging.getLogger(__name__)
 
@@ -93,3 +94,19 @@ class VNFActionRespawn(abstract_action.AbstractPolicyAction):
                 _delete_heat_stack(vim_res['vim_auth'])
                 vnf_dict['attributes'].pop('alarming_policy')
                 _respawn_vnf()
+
+class ClusterActionRecovery(abstract_action.AbstractPolicyAction):
+    def get_type(self):
+        return 'recovery'
+
+    def get_name(self):
+        return 'recovery'
+
+    def get_description(self):
+        return 'Tacker VNF cluster Recovery policy'
+
+    def execute_action(self, plugin, context, vnf_dict, args):
+        LOG.error(_('Recovery action for cluster member %s dead'), vnf_dict['id'])
+        nfvo_plugin = manager.TackerManager.get_service_plugins()['NFVO']
+        new_active_member = nfvo_plugin.recovery_action(context, plugin, vnf_dict['id'])
+        LOG.debug(_('Recovery with new_member : %s'), new_active_member)

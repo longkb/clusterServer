@@ -24,6 +24,8 @@ from tacker.api.v1 import resource_helper
 from tacker.common import exceptions
 from tacker.plugins.common import constants
 from tacker.services import service_base
+from tacker.api.v1 import base
+from tacker import manager
 
 
 class VimUnauthorizedException(exceptions.TackerException):
@@ -45,6 +47,9 @@ class VimDefaultNotDefined(exceptions.TackerException):
 class VimDefaultDuplicateException(exceptions.TackerException):
     message = _("Default VIM already exists %(vim_id)s.")
 
+class VimNameNotFoundException(exceptions.TackerException):
+    message = _("Specified VIM name %(vim_name)s is invalid. Please verify and "
+                "pass a valid VIM name")
 
 class VimNotFoundException(exceptions.TackerException):
     message = _("Specified VIM id %(vim_id)s is invalid. Please verify and "
@@ -239,6 +244,8 @@ class NSInUse(exceptions.InUse):
 class NoTasksException(exceptions.TackerException):
     message = _('No tasks to run for %(action)s on %(resource)s')
 
+class VnfClusterInUse(exceptions.InUse):
+    message = _('VnfCluster %(cluster_id)s is still in use')
 
 RESOURCE_ATTRIBUTE_MAP = {
 
@@ -751,7 +758,119 @@ RESOURCE_ATTRIBUTE_MAP = {
             'default': None,
         },
     },
+    'clusters': {
+        'id': {
+            'allow_post': False,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+            'primary_key': True
+        },
+        'tenant_id': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:string': None},
+            'required_by_policy': True,
+            'is_visible': True
+        },
+        'vnfd_id': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+        },
+        'name': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:string': None},
+            'is_visible': True,
+        },
+        'policy_info': {
+            'allow_post': True,
+            'allow_put': False,
+            'convert_to': attr.convert_none_to_empty_dict,
+            'validate': {'type:dict_or_nodata': None},
+            'is_visible': True,
+            'default': None,
+        },
+        'description': {
+            'allow_post': True,
+            'allow_put': True,
+            'validate': {'type:string': None},
+            'is_visible': True,
+            'default': '',
+        },
+        'status': {
+            'allow_post': False,
+            'allow_put': False,
+            'is_visible': True,
+        },
 
+        'lb_id': {
+            'allow_post': False,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+        },
+    },
+    'clustermembers': {
+        'id': {
+            'allow_post': False,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+            'primary_key': True
+        },
+        'tenant_id': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:string': None},
+            'required_by_policy': True,
+            'is_visible': True
+        },
+        'name': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:string': None},
+            'is_visible': True,
+        },
+        'cluster_id': {
+            'allow_post': True,
+            'allow_put': True,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+        },
+        'vnfd_id': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+        },
+        'placement_attr': {
+            'allow_post': False,
+            'allow_put': False,
+            'validate': {'type:string': None},
+            'is_visible': True,
+        },
+        'role': {
+            'allow_post': True,
+            'allow_put': False,
+            'validate': {'type:string': None},
+            'is_visible': True,
+        },
+        'lb_member_id': {
+            'allow_post': False,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+        },
+        'cp_id': {
+            'allow_post': False,
+            'allow_put': False,
+            'validate': {'type:uuid': None},
+            'is_visible': True,
+        },
+    },
 }
 
 
