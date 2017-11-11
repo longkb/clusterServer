@@ -45,9 +45,10 @@ class VnfCluster(model_base.BASE, models_v1.HasId, models_v1.HasTenant):
     description = sa.Column(sa.String(255), nullable=True)
     status = sa.Column(sa.String(255), nullable=False)
     vnfd_id = sa.Column(types.Uuid, nullable=False)
-    lb_id=sa.Column(types.Uuid)
+    lb_info=sa.Column(types.Json, nullable= True)
     cluster_members = orm.relationship("VnfClusterMember", backref="vnfcluster")
     policy_info = sa.Column(types.Json)
+    role_config = sa.Column(types.Json)
 
 class VnfClusterMember(model_base.BASE, models_v1.HasId, models_v1.HasTenant):
     """VNF Cluster Member Data Model"""
@@ -113,6 +114,7 @@ class VnfClusterPluginDb(vnfcluster.VnfClusterPluginBase, db_base.CommonDbMixin)
         description = cluster_config['description']
         vnfd_id = cluster_config['vnfd_id']
         policy_info = cluster_config['policy_info']
+        role_config = cluster_config['policy_info']['properties']['role']
 
         with context.session.begin(subtransactions = True):
             cluster_db = VnfCluster(id = cluster_id,
@@ -121,7 +123,8 @@ class VnfClusterPluginDb(vnfcluster.VnfClusterPluginBase, db_base.CommonDbMixin)
                                     description = description,
                                     status = constants.ACTIVE,
                                     vnfd_id = vnfd_id,
-                                    policy_info = policy_info)
+                                    policy_info = policy_info,
+                                    role_config = role_config)
             context.session.add(cluster_db)
         cluster_dict = self._make_cluster_dict(cluster_db)
         return cluster_dict
@@ -129,7 +132,7 @@ class VnfClusterPluginDb(vnfcluster.VnfClusterPluginBase, db_base.CommonDbMixin)
     def _make_cluster_dict(self, cluster_db, fields=None):
         res = {}
         key_list = ('id', 'tenant_id', 'name', 'description', 'status', 'vnfd_id',
-                    'lb_id', 'policy_info',)
+                    'lb_info', 'policy_info','role_config')
         res.update((key, cluster_db[key]) for key in key_list)
         return self._fields(res, fields)
 
@@ -139,42 +142,48 @@ class VnfClusterPluginDb(vnfcluster.VnfClusterPluginBase, db_base.CommonDbMixin)
                      filter(VnfCluster.id == cluster_id))
             query.update({field: attr})
 
-    def _update_lb_policy(self, context, cluster_id, lb_result):
-        with context.session.begin(subtransactions=True):
-            query = (self._model_query(context, VnfCluster).
-                     filter(VnfCluster.id == cluster_id))
-            query.update({'policy_info': {'loadbalancer': lb_result}})
-
-    def _update_policy_info(self, context, cluster_id, policy_info):
-        with context.session.begin(subtransactions=True):
-            query = (self._model_query(context, VnfCluster).
-                     filter(VnfCluster.id == cluster_id))
-            query.update({'policy_info': policy_info})
-
-    def _update_lb_id(self, context, cluster_id, lb_id):
-        with context.session.begin(subtransactions=True):
-            query = (self._model_query(context, VnfCluster).
-                     filter(VnfCluster.id == cluster_id))
-            query.update({'lb_id': lb_id})
-
-    def get_policy_attr(self, policy_info, key):
-        attr = policy_info['properties'][key]
-        return attr
-
     def get_lb_config(self, policy_info, attr_key):
-        attr_dict= policy_info['properties']['load_balancer']['properties'][attr_key]
+        attr_dict= policy_info['properties']['load_balancer'][attr_key]
         return attr_dict
 
+    def get_role_by_vim(self, role_config, vim_name):
+        filted_role = {}
+        for role, role_attr in role_config.iteritems():
+            n_node = 0
+            for vim, n in role_attr.iteritems():
+                if vim == vim_name:
+                    n_node += n
+            if n_node != 0:
+                filted_role[role] = n_node
+
+        return filted_role
+
+    def get_vim_from_policy(self, context, policy):
+        default_vim = self.get_vim_by_name(context, None).get('name')
+        vim_list = []
+        role_config = policy['properties']['role']
+        for role, role_attr in role_config.iteritems():
+            if type(role_attr) is int:
+                if None not in vim_list:
+                    vim_list.append(default_vim)
+            else:
+                for vim_name, n in role_attr.iteritems():
+                    if n > 0 and vim_name not in vim_list:
+                        vim_list.append(vim_name)
+        return vim_list
+
+
     #Cluster member related functions
-    def _create_cluster_member(self, context, vnfm_plugin, cluster_dict, name, role):
-        vnf_member = self._create_vnf_member(context, vnfm_plugin, cluster_dict, name)
+    def _create_cluster_member(self, context, vnfm_plugin, cluster_dict, name, role, vim_name):
+        vnf_member = self._create_vnf_member(context, vnfm_plugin, cluster_dict, name, vim_name)
         vnf_member['cp_id'] = self._get_member_cp_id(context, vnfm_plugin, cluster_dict, vnf_member['id'])
         member_dict = self._make_member_dict_from_vnf(cluster_dict['id'], role, vnf_member)
         self._create_member(context, member_dict)
         return member_dict
 
-    def _create_vnf_member(self, context, vnfm_plugin, cluster, name):
-        pre_vnf_dict = self._make_pre_vnf_dict(cluster, name)
+    def _create_vnf_member(self, context, vnfm_plugin, cluster, name, vim_name):
+        vim_dict = self.get_vim_by_name(context, vim_name)
+        pre_vnf_dict = self._make_pre_vnf_dict(cluster, name, vim_dict['id'])
         vnf_dict = vnfm_plugin.create_vnf(context, pre_vnf_dict)
         while (1):
             LOG.debug(_("Creating %s ..."), vnf_dict.get('name'))
@@ -183,23 +192,24 @@ class VnfClusterPluginDb(vnfcluster.VnfClusterPluginBase, db_base.CommonDbMixin)
             time.sleep(2)
         return vnf_dict
 
-    def _make_member_config(self, name, role, cluster_id, vnfd_id):
+    def _make_member_config(self, name, role, cluster_id, vnfd_id, vim_name):
         config = {}
         config['name'] = name
         config['role'] = role
         config['cluster_id'] = cluster_id
+        config['placement_attr'] = vim_name
         config['vnfd_id'] = vnfd_id
         member_config = {'clustermember': config}
         return member_config
 
-    def _make_pre_vnf_dict(self, cluster, name):
+    def _make_pre_vnf_dict(self, cluster, name, vim_id):
         vnf_dict = {}
         p = {}
         p['description'] = 'A member of cluster ' + cluster['name']
         p['tenant_id'] = cluster['tenant_id']
-        p['vim_id'] = ''
+        p['vim_id'] = vim_id
         p['name'] = name
-        p['placement_attr'] = {}
+        p['placement_attr']= {}
         p['attributes'] = {}
         p['vnfd_id'] = cluster['vnfd_id']
         vnf_dict['vnf'] = p
@@ -263,18 +273,19 @@ class VnfClusterPluginDb(vnfcluster.VnfClusterPluginBase, db_base.CommonDbMixin)
 
     def _get_member_cp_id(self, context, vnfm_plugin, cluster, member_id):
         vnf_resources = vnfm_plugin.get_vnf_resources(context, member_id)
-        lb_targets = cluster['policy_info']['properties']['load_balancer']['properties']['targets']
+        lb_targets = cluster['policy_info']['properties']['load_balancer']['targets']
         for resource in vnf_resources:
             if resource['name'] in lb_targets:
                 member_port_id = resource['id']
                 break
         return member_port_id
 
-    def _get_member_by_role(self, context, cluster_id, role):
+    def _get_member_by_role(self, context, cluster_id, role, vim):
         member_db = (
             self._model_query(context, VnfClusterMember).
                 filter(VnfClusterMember.cluster_id == cluster_id).
-                filter(VnfClusterMember.role == role)).one()
+                filter(VnfClusterMember.role == role).
+                filter(VnfClusterMember.placement_attr == vim).one())
         return member_db
 
     def get_members_by_attr(self, context, key=None, value=None):

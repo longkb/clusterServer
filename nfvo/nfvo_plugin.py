@@ -845,18 +845,44 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
         return ns['id']
 
     @log.log
-    def create_cluster(self, context, cluster):
-        # 1. Create DB(Cluster)
+    def create_cluster(self, context, cluster, reconfig = None):
+        # 1. Create Cluster
         cluster_config = cluster['cluster']
-        cluster_dict = self._create_cluster_db(context, cluster_config)
-        cluster_id = cluster_dict['id']
 
-        #Get policy info from  cluster object to deploy cluster member
-        policy_info = cluster_config['policy_info']
-        role_config = self.get_policy_attr(policy_info, 'role')
-        #Get VIM for VNF placement
-        vim_name = self.get_policy_attr(policy_info, 'placement_attr')
-        vim_dict = self.get_vim_by_name(context, vim_name)
+        if reconfig == None:
+            cluster_dict = self._create_cluster_db(context, cluster_config)
+            policy_info = cluster_dict['policy_info']
+            role_policy = policy_info['properties']['role']
+            vim_names = self.get_vim_from_policy(context, policy_info)
+            cluster_dict['lb_info'] = {}
+        else:
+            role_config = reconfig['role_config']
+            vim_names = reconfig['vim_name']
+            cluster_dict = reconfig ['cluster_dict']
+
+        #Get cluster_id from deployed cluster
+        cluster_id = cluster_dict['id']
+        policy_info = cluster_dict['policy_info']
+
+        #Mulisite scenario processing
+        if len(vim_names)>1:
+            for vim in vim_names:
+                role_by_vim = self.get_role_by_vim(role_policy, vim)
+                if len(role_by_vim) > 0:
+                    reconfig = {}
+                    reconfig['vim_name'] = [vim]
+                    reconfig['role_config'] = role_by_vim
+                    reconfig['cluster_dict'] = cluster_dict
+                    cluser_result = self.create_cluster(context, cluster, reconfig=reconfig)
+
+            if cluser_result != None:
+                return cluser_result
+        elif len(vim_names) == 1:
+            vim_names = vim_names[0]
+            vim_dict = self.get_vim_by_name(context, vim_names)
+        else:
+            #There is no VIM name is specified.
+            LOG.error('There is no VIM is specified')
 
         # 2. Deploy Neutron Load-balancer for created cluster members
         lb_pool = self.get_lb_config(policy_info, 'pool')
@@ -865,23 +891,21 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
                                            lb_pool=lb_pool,
                                            lb_vip=lb_vip,
                                            auth_attr=vim_dict['auth_cred'])
-        cluster_dict['lb_id']=lb_info['loadbalancer']
 
-        policy_info['properties']['load_balancer']['lb_info'] = lb_info
-        self._update_cluster_attr(context, cluster_id, 'policy_info', policy_info)
-        self._update_cluster_attr(context, cluster_id, 'lb_id', lb_info['loadbalancer'])
+        cluster_dict['lb_info'][vim_names] = lb_info
+        self._update_cluster_attr(context, cluster_id, 'lb_info', cluster_dict['lb_info'])
 
         # 3. Create cluster member by role
         for role in role_config:
             n_members = role_config[role]
             for i in xrange(n_members):
-                member_name = cluster_dict['name'] + '_' + role.upper() + '_mem_'+ str(uuid.uuid4())
-                member_config = self._make_member_config(member_name, role, cluster_id, cluster_dict['vnfd_id'])
+                member_name = role.upper() + '_'+ str(uuid.uuid4())
+                member_config = self._make_member_config(member_name, role, cluster_id, cluster_dict['vnfd_id'], vim_names)
                 self.create_clustermember(context, member_config)
         return cluster_dict
 
     @log.log
-    def recovery_action(self, context, vnfm_plugin, vnf_id):
+    def recovery_action(self, context, vnf_id):
         fault_member_id = vnf_id
         LOG.warning(_("Handling recovery_action for the fault vnf_id : %s"), fault_member_id)
         fault_member_dict = self.get_clustermember(context, fault_member_id)
@@ -889,30 +913,29 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
         cluster_id = fault_member_dict['cluster_id']
         cluster_dict = self.get_cluster(context, cluster_id)
         LOG.debug(_("Recovery_action on vnfcluster : %s"), cluster_dict)
-        policy_info = cluster_dict['policy_info']
-        role_config = self.get_policy_attr(policy_info, 'role')
 
         #Get vim_obj
         vim_name =  fault_member_dict['placement_attr']
         vim_obj = self.get_vim_by_name(context, vim_name)
 
-        #Get Load balancer object
-        lb_obj = policy_info['properties']['load_balancer']['lb_info']
+        role_config = self.get_role_by_vim(cluster_dict['role_config'],vim_name)
+        lb_info = cluster_dict['lb_info'].get(vim_name)
 
         fault_member_role = fault_member_dict['role']
         if fault_member_role == constants.CLUSTER_ACTIVE:
-            if role_config['standby'] > 0:
+            n_standby = role_config.get('standby')
+            if n_standby > 0:
                 # 1a. Update STANDBY member to ACTIVE member, and a new member will be STANDBY member
-                alter_member = self._get_member_by_role(context, cluster_id, constants.CLUSTER_STANDBY)
-                self.update_member_role(context, vim_obj, lb_obj, alter_member, constants.CLUSTER_ACTIVE)
+                alter_member = self._get_member_by_role(context, cluster_id, constants.CLUSTER_STANDBY, vim_name)
+                self.update_member_role(context, vim_obj, lb_info, alter_member, constants.CLUSTER_ACTIVE)
                 new_member_role = constants.CLUSTER_STANDBY
 
-            elif role_config['standby'] == 0 or role_config['standby'] == None:
+            elif n_standby == 0 or n_standby == None:
                 # 1b. Pointing out that a new member will be ACTIVE member
                 new_member_role = constants.CLUSTER_ACTIVE
 
             else:
-                LOG.error(_('Invalid configuration for role %s'), constants.CLUSTER_STANDBY)
+                LOG.error('Invalid configuration for role %s', constants.CLUSTER_STANDBY)
 
         elif fault_member_role == constants.CLUSTER_STANDBY:
             #1c. In the case of STANDBY member down, we just need to deploy a new STANDBY member
@@ -920,12 +943,12 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
 
         #2. Create an alternative cluster member
         LOG.debug(_('Create an additional %s cluster member'), new_member_role)
-        member_name = cluster_dict['name'] + '_' + new_member_role + '_mem_' + str(uuid.uuid4())
-        member_config = self._make_member_config(member_name, new_member_role, cluster_id, cluster_dict['vnfd_id'])
+        member_name = new_member_role + '_' + str(uuid.uuid4())
+        member_config = self._make_member_config(member_name, new_member_role, cluster_id, cluster_dict['vnfd_id'], vim_name)
         new_member = self.create_clustermember(context, member_config)
 
         #3. Remove the fault member
-        self.delete_clustermember(context, fault_member_id, vim_obj, lb_obj)
+        self.delete_clustermember(context, fault_member_id)
         return new_member
 
     @log.log
@@ -939,28 +962,32 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
     @log.log
     def delete_cluster(self, context, cluster_id):
         cluster_dict = self.get_cluster(context, cluster_id)
-
-        #Get load balancer information
-        lb_info = cluster_dict['policy_info']['properties']['load_balancer']['lb_info']
-        #Get VIM attr
-        vim_name = self.get_policy_attr(cluster_dict['policy_info'], 'placement_attr')
-        vim_dict = self.get_vim_by_name(context, vim_name)
-
         #Delete member from cluster
-        member_list= self.get_clustermembers(context, key='cluster_id', value=cluster_id)
-        for mem in member_list:
-            self.delete_clustermember(context, mem['id'], vim_dict, lb_info)
+        try:
+            member_list = self.get_clustermembers(context, key='cluster_id', value=cluster_id)
+            for mem in member_list:
+                self.delete_clustermember(context, mem['id'])
+        except:
+            LOG.debug('There is not any attached member in cluster %s', cluster_dict['id'])
 
+        lb_info = cluster_dict['lb_info']
         #Delete load balancer
-        self._vim_drivers.invoke(vim_dict['type'], 'delete_loadbalancer',
-                                           lb_id=lb_info['loadbalancer'],
-                                           lb_pool=lb_info['pool'],
-                                           lb_listener=lb_info['listener'],
-                                           auth_attr=vim_dict['auth_cred'])
+        if lb_info != None:
+            for vim in lb_info:
+                lb_by_vim = cluster_dict['lb_info'][vim]
+                try:
+                    vim_dict = self.get_vim_by_name(context, vim)
+                    self._vim_drivers.invoke(vim_dict['type'], 'delete_loadbalancer',
+                                             lb_id=lb_by_vim['loadbalancer'],
+                                             lb_pool=lb_by_vim['pool'],
+                                             lb_listener=lb_by_vim['listener'],
+                                             auth_attr=vim_dict['auth_cred'])
+                except:
+                    LOG.debug('Load balancer resouces could not be found')
         self._delete_cluster_db(context, cluster_id)
 
     @log.log
-    def create_clustermember(self, context, clustermember, vim_obj=None, lb_obj=None):
+    def create_clustermember(self, context, clustermember):
         vnfm_plugin = manager.TackerManager.get_service_plugins()['VNFM']
 
         LOG.debug('Adding a new cluster member: %s', clustermember)
@@ -968,31 +995,30 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
         role = clustermember['clustermember']['role']
         cluster_id = clustermember['clustermember']['cluster_id']
         vnfd_id = clustermember['clustermember']['vnfd_id']
+        vim_name = clustermember['clustermember']['placement_attr']
 
         cluster_dict=self.get_cluster(context, cluster_id)
+        vim_obj = self.get_vim_by_name(context, vim_name)
 
         if vnfd_id != cluster_dict['vnfd_id']:
             LOG.error('vnfd_id %s is not match with vnfd_id in the cluster configuration', vnfd_id)
             return None
 
-        member_dict = self._create_cluster_member(context, vnfm_plugin, cluster_dict, name, role)
+        member_dict = self._create_cluster_member(context, vnfm_plugin, cluster_dict, name, role, vim_name)
 
         #Attach ACTIVE cluster member in deployed load balancer
         if member_dict['role'] == constants.CLUSTER_ACTIVE:
-            if lb_obj == None:
-                policy_info = cluster_dict['policy_info']
-                lb_obj = policy_info['properties']['load_balancer']['lb_info']
-
-            if vim_obj == None:
-                vim_name = member_dict['placement_attr']
-                vim_obj = self.get_vim_by_name(context, vim_name)
-
-            lb_member_id = self._vim_drivers.invoke(vim_obj['type'], 'pool_member_add',
-                                                    net_port_id=member_dict['cp_id'],
-                                                    lb_info=lb_obj,
-                                                    auth_attr=vim_obj['auth_cred'])
-            LOG.debug(_("create lb_member_result : %s"), lb_member_id)
-            self._update_member_attr(context, member_dict['id'], 'lb_member_id', lb_member_id)
+            try:
+                lb_obj = cluster_dict['lb_info'].get(vim_name)
+                lb_member_id = self._vim_drivers.invoke(vim_obj['type'], 'pool_member_add',
+                                                        net_port_id=member_dict['cp_id'],
+                                                        lb_info=lb_obj,
+                                                        auth_attr=vim_obj['auth_cred'])
+                LOG.debug(_("create lb_member_result : %s"), lb_member_id)
+                self._update_member_attr(context, member_dict['id'], 'lb_member_id', lb_member_id)
+            except:
+                LOG.error('Load balancer resource could not be found in %s', vim_name)
+                LOG.error('Member %ds could not be attach on load balancer', member_dict['id'])
         return member_dict
 
     log.log
@@ -1013,7 +1039,7 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
         return member_list
 
     @log.log
-    def delete_clustermember(self, context, cluster_member_id, vim_obj=None, lb_obj = None):
+    def delete_clustermember(self, context, cluster_member_id):
         vnfm_plugin = manager.TackerManager.get_service_plugins()['VNFM']
         member_id = cluster_member_id
         member = self.get_clustermember(context, member_id)
@@ -1021,22 +1047,20 @@ class NfvoPlugin(nfvo_db_plugin.NfvoPluginDb, vnffg_db.VnffgPluginDbMixin,
         lb_member_id = member['lb_member_id']
         LOG.debug('The deleted member has %s role', member_role)
 
+        vim_name = member['placement_attr']
+        vim_obj = self.get_vim_by_name(context, vim_name)
         if member_role == constants.CLUSTER_ACTIVE:
-            if vim_obj == None:
-                vim_name = member['placement_attr']
-                vim_obj = self.get_vim_by_name(context, vim_name)
-
-            if lb_obj == None:
+            try:
                 cluster_id = member['cluster_id']
-                policy_info = self.get_cluster(context, cluster_id, 'policy_info')
-                lb_obj = policy_info['policy_info']['properties']['load_balancer']['lb_info']
-                LOG.debug('Get load balancer information: %s', lb_obj)
-
-            self._vim_drivers.invoke(vim_obj['type'], 'pool_member_remove',
-                                     lb_id=lb_obj['loadbalancer'],
-                                     pool_id=lb_obj['pool'],
-                                     member_id=lb_member_id,
-                                     auth_attr=vim_obj['auth_cred'])
+                lb_info = self.get_cluster(context, cluster_id, 'lb_info')['lb_info'][vim_name]
+                LOG.debug('Get load balancer information: %s', lb_info)
+                self._vim_drivers.invoke(vim_obj['type'], 'pool_member_remove',
+                                         lb_id=lb_info['loadbalancer'],
+                                         pool_id=lb_info['pool'],
+                                         member_id=lb_member_id,
+                                         auth_attr=vim_obj['auth_cred'])
+            except:
+                LOG.error('Load balancer resource could not be found')
 
         self._delete_member_db(context, member_id)
         vnfm_plugin.delete_vnf(context, member_id)

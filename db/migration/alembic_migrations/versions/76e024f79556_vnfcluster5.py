@@ -32,33 +32,4 @@ from tacker.db.types import Json
 
 
 def upgrade(active_plugins=None, options=None):
-    # op.drop_table('cluster_members')
-    # op.drop_table('clusters')
-    op.create_table(
-        'vnfclusters',
-        sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('tenant_id', sa.String(length=64), nullable=False),
-        sa.Column('name', sa.String(length=255), nullable=True),
-        sa.Column('description', sa.String(length=255), nullable=True),
-        sa.Column('status', sa.String(length=255), nullable=False),
-        sa.Column('vnfd_id', sa.String(length=36), nullable=False),
-        sa.Column('lb_id', sa.String(length=36), nullable=True),
-        sa.Column('policy_info', Json, nullable=True),
-        sa.PrimaryKeyConstraint('id'),
-        mysql_engine='InnoDB'
-    )
-
-    op.create_table(
-        'vnfclustermembers',
-        sa.Column('id', sa.String(length=36), nullable=False),
-        sa.Column('tenant_id', sa.String(length=64), nullable=False),
-        sa.Column('name', sa.String(length=255), nullable=True),
-        sa.Column('cluster_id', sa.String(length=36), nullable=False),
-        sa.Column('role', sa.String(length=255), nullable=False),
-        sa.Column('lb_member_id', sa.String(length=36), nullable=True),
-        sa.Column('placement_attr', sa.String(length=255), nullable=False),
-        sa.Column('cp_id', sa.String(length=255), nullable=True),
-        sa.ForeignKeyConstraint(['cluster_id'], ['vnfclusters.id'], ),
-        sa.PrimaryKeyConstraint('id'),
-        mysql_engine='InnoDB'
-    )
+    print 'Skip'

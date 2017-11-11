@@ -108,5 +108,5 @@ class ClusterActionRecovery(abstract_action.AbstractPolicyAction):
     def execute_action(self, plugin, context, vnf_dict, args):
         LOG.error(_('Recovery action for cluster member %s dead'), vnf_dict['id'])
         nfvo_plugin = manager.TackerManager.get_service_plugins()['NFVO']
-        new_active_member = nfvo_plugin.recovery_action(context, plugin, vnf_dict['id'])
+        new_active_member = nfvo_plugin.recovery_action(context, vnf_dict['id'])
         LOG.debug(_('Recovery with new_member : %s'), new_active_member)

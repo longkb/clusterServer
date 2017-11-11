@@ -806,11 +806,12 @@ RESOURCE_ATTRIBUTE_MAP = {
             'is_visible': True,
         },
 
-        'lb_id': {
+        'lb_info': {
             'allow_post': False,
             'allow_put': False,
-            'validate': {'type:uuid': None},
+            'validate': {'type:dict_or_nodata': None},
             'is_visible': True,
+            'default': None
         },
     },
     'clustermembers': {
@@ -951,7 +952,7 @@ class NFVOPluginBase(service_base.NFVPluginBase):
 
     def get_vim_by_name(self, context, vim_name, fields=None,
                         mask_password=True):
-        raise NotImplementedError()
+        pass
 
     def get_default_vim(self, context):
         raise NotImplementedError()
